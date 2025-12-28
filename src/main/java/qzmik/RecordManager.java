@@ -1,6 +1,7 @@
 package qzmik;
 
 import java.io.EOFException;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
@@ -26,6 +27,17 @@ public class RecordManager {
     private int overflowPageReads = 0;
     private int overflowPageWrites = 0;
 
+    public RecordManager() throws FileNotFoundException, IOException {
+        mainFile = new RecordFile(false);
+        overflowFile = new RecordFile(true);
+        mainBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+        writeBufferToMainFile(0);
+        mainPagesCount++;
+        overflowBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+        writeBufferToOverflowFile(0);
+        overflowPagesCount++;
+    }
+
     private void readMainPageIntoBuffer(int targetPage) throws IOException, EOFException {
         if (targetPage == currentMainPageLoaded) {
             return;
@@ -45,6 +57,7 @@ public class RecordManager {
         mainFile.position(targetPage * BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
         mainFile.writePageOfRecords(mainBuffer.array());
         mainPageWrites++;
+        mainBuffer.position(0);
     }
 
     private void readOverflowPageIntoBuffer(int targetPage) throws IOException, EOFException {
@@ -66,6 +79,7 @@ public class RecordManager {
         overflowFile.position(targetPage * BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
         overflowFile.writePageOfRecords(mainBuffer.array());
         overflowPageWrites++;
+        overflowBuffer.position(0);
     }
 
     private int[] determineOverflowPosition(int overflow) {
@@ -74,7 +88,42 @@ public class RecordManager {
         return overflowPosition;
     }
 
+    public int[] giveReadWriteData() {
+        int readWriteData[] = { mainPageReads, mainPageWrites, overflowPageReads, overflowPageWrites };
+        return readWriteData;
+    }
+
     public Record readRecord(int pageNumber, int index) throws IOException {
+
+        // directed to special overflow
+        if (pageNumber == -1) {
+            int overflow = specialOverflowPointer;
+            if (overflow == -1) {
+                return null;
+            }
+            while (overflow != -1) {
+                int overflowPosition[] = determineOverflowPosition(overflow);
+                readOverflowPageIntoBuffer(overflowPosition[0]);
+                overflowBuffer.position(overflowPosition[1] * Record.RECORD_SIZE_ON_DISK);
+                int recordIndex = overflowBuffer.getInt();
+                // EOF
+                if (recordIndex == 0) {
+                    mainBuffer.position(0);
+                    overflowBuffer.position(0);
+                    break;
+                }
+                Double recordVoltage = overflowBuffer.getDouble();
+                Double recordCurrent = overflowBuffer.getDouble();
+                overflow = overflowBuffer.getInt();
+
+                if (recordIndex == index) {
+                    mainBuffer.position(0);
+                    overflowBuffer.position(0);
+                    return new Record(index, recordVoltage, recordCurrent, overflow);
+                }
+            }
+            return null;
+        }
 
         readMainPageIntoBuffer(pageNumber); // this is after looking for record in current buffer
 
@@ -98,6 +147,13 @@ public class RecordManager {
         }
         // assuming we are at a correct page, this means the record belongs to the
         // overflow if it exists
+
+        // if after reading just the first record of current buffer it was already too
+        // big, then it is not in the buffer, nor in corresponding overflow
+        if (mainBuffer.position() == 0) {
+            return null;
+        }
+
         mainBuffer.position(mainBuffer.position() - 4);
         int overflow = mainBuffer.getInt();
 
@@ -114,6 +170,13 @@ public class RecordManager {
             Double recordCurrent = overflowBuffer.getDouble();
             overflow = overflowBuffer.getInt();
 
+            // EOF
+            if (recordIndex == 0) {
+                mainBuffer.position(0);
+                overflowBuffer.position(0);
+                break;
+            }
+
             if (recordIndex == index) {
                 mainBuffer.position(0);
                 overflowBuffer.position(0);
@@ -125,14 +188,77 @@ public class RecordManager {
 
     public void writeRecord(Record record, int pageNumber) throws IOException {
 
+        // directed to special overflow
+        if (pageNumber == -1) {
+            int recordIndex = 0;
+            int overflow = specialOverflowPointer;
+            int prevOverflow = specialOverflowPointer;
+            if (overflow == -1) {
+                specialOverflowPointer = overflowRecordsCount;
+            } else {
+                while (overflow != -1) {
+                    int overflowPosition[] = determineOverflowPosition(overflow);
+                    readOverflowPageIntoBuffer(overflowPosition[0]);
+                    overflowBuffer.position(overflowPosition[1] * Record.RECORD_SIZE_ON_DISK);
+
+                    recordIndex = overflowBuffer.getInt();
+                    if (recordIndex == 0 || recordIndex < record.getKey()) {
+                        mainBuffer.position(0);
+                        overflowBuffer.position(0);
+                        break;
+                    }
+                    Double recordVoltage = overflowBuffer.getDouble();
+                    Double recordCurrent = overflowBuffer.getDouble();
+                    prevOverflow = overflow;
+                    overflow = overflowBuffer.getInt();
+                }
+                if (overflow == specialOverflowPointer) {
+                    specialOverflowPointer = overflowRecordsCount;
+                } else {
+                    if (recordIndex != 0) {
+                        int overflowPosition[] = determineOverflowPosition(prevOverflow);
+                        readOverflowPageIntoBuffer(overflowPosition[0]);
+                        overflowBuffer.position(overflowPosition[1] * Record.RECORD_SIZE_ON_DISK);
+                        recordIndex = overflow; // save the pointer (even if it is end of chain)
+                        overflowBuffer.position(overflowBuffer.position() - 4);
+                        overflowBuffer.putInt(overflowRecordsCount);
+                        writeBufferToOverflowFile(currentOverflowPageLoaded);
+                    }
+                }
+            }
+
+            int overflowPosition[] = determineOverflowPosition(overflowRecordsCount);
+            readOverflowPageIntoBuffer(overflowPosition[0]);
+
+            Record currRecord;
+            while (overflowBuffer.hasRemaining()) {
+                currRecord = new Record(overflowBuffer.getInt(), overflowBuffer.getDouble(),
+                        overflowBuffer.getDouble(),
+                        overflowBuffer.getInt());
+                if (currRecord.getKey() == 0) {
+                    overflowBuffer.position(overflowBuffer.position() - Record.RECORD_SIZE_ON_DISK);
+                    overflowBuffer.putInt(record.getKey());
+                    overflowBuffer.putDouble(record.getVoltage());
+                    overflowBuffer.putDouble(record.getCurrent());
+                    overflowBuffer.putInt(overflow); // put correct pointer to preserve sorted linked list
+                    overflowRecordsCount++;
+                    writeBufferToOverflowFile(currentOverflowPageLoaded);
+                    return;
+                }
+            }
+        }
+
         if (pageNumber != currentMainPageLoaded) {
             readMainPageIntoBuffer(pageNumber);
         }
 
-        if (checkForRecordInCurrentBuffer(record.getKey()) != null) {
-            System.out.printf("Record already exists!\n");
-            return;
-        }
+        // LEGACY CHECK
+        /*
+         * if (checkForRecordInCurrentBuffer(record.getKey()) != null) {
+         * System.out.printf("Record already exists!\n");
+         * return;
+         * }
+         */
 
         Record currRecord;
 
@@ -159,7 +285,9 @@ public class RecordManager {
             }
         }
 
+        mainBuffer.position(mainBuffer.position() - 4);
         int overflow = mainBuffer.getInt();
+        int prevOverflow = overflow;
         // no chain
         if (overflow == -1) {
             mainBuffer.position(mainBuffer.position() - 4);
@@ -167,19 +295,38 @@ public class RecordManager {
             mainBuffer.position(0);
             writeBufferToMainFile(currentMainPageLoaded);
         } else {
+            int recordIndex = 0;
             while (overflow != -1) {
                 int overflowPosition[] = determineOverflowPosition(overflow);
                 readOverflowPageIntoBuffer(overflowPosition[0]);
                 overflowBuffer.position(overflowPosition[1] * Record.RECORD_SIZE_ON_DISK);
-                int recordIndex = overflowBuffer.getInt();
+
+                recordIndex = overflowBuffer.getInt();
+                if (recordIndex == 0 || recordIndex < record.getKey()) {
+                    mainBuffer.position(0);
+                    overflowBuffer.position(0);
+                    break;
+                }
                 Double recordVoltage = overflowBuffer.getDouble();
                 Double recordCurrent = overflowBuffer.getDouble();
+                prevOverflow = overflow;
                 overflow = overflowBuffer.getInt();
             }
-            overflowBuffer.position(overflowBuffer.position() - 4);
-            overflowBuffer.putInt(overflowRecordsCount);
-            overflowBuffer.position(0);
-            writeBufferToOverflowFile(currentOverflowPageLoaded);
+            // record belongs to beginning of chain
+            if (overflow == prevOverflow) {
+                mainBuffer.position(mainBuffer.position() - 4);
+                mainBuffer.putInt(overflowRecordsCount);
+                mainBuffer.position(0);
+                writeBufferToMainFile(currentMainPageLoaded);
+            } else if (recordIndex != 0) {
+                int overflowPosition[] = determineOverflowPosition(prevOverflow);
+                readOverflowPageIntoBuffer(overflowPosition[0]);
+                overflowBuffer.position(overflowPosition[1] * Record.RECORD_SIZE_ON_DISK);
+                recordIndex = overflow; // save the pointer (even if it is end of chain)
+                overflowBuffer.position(overflowBuffer.position() - 4);
+                overflowBuffer.putInt(overflowRecordsCount);
+                writeBufferToOverflowFile(currentOverflowPageLoaded);
+            }
         }
 
         int overflowPosition[] = determineOverflowPosition(overflowRecordsCount);
@@ -194,7 +341,7 @@ public class RecordManager {
                 overflowBuffer.putInt(record.getKey());
                 overflowBuffer.putDouble(record.getVoltage());
                 overflowBuffer.putDouble(record.getCurrent());
-                overflowBuffer.putInt(record.getOverflow());
+                overflowBuffer.putInt(overflow);
                 overflowRecordsCount++;
                 writeBufferToOverflowFile(currentOverflowPageLoaded);
                 return;

@@ -16,9 +16,10 @@ public class IndexManager {
     private int pageReads = 0;
     private int pageWrites = 0;
 
-    public IndexManager() throws FileNotFoundException {
+    public IndexManager() throws FileNotFoundException, IOException {
         indexFile = new IndexFile();
         buffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+        writeBufferToFile(0);
     }
 
     private void readPageIntoBuffer(int targetPage) throws IOException, EOFException {
@@ -37,8 +38,12 @@ public class IndexManager {
         indexFile.position(targetPage * BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
         indexFile.writePageOfRecords(buffer.array());
         pageWrites++;
-        buffer = ByteBuffer
-                .allocate(IndexRecord.RECORD_SIZE_ON_DISK * BLOCKING_FACTOR);
+        buffer.position(0);
+    }
+
+    public int[] giveReadWriteData() {
+        int readWriteData[] = { pageReads, pageWrites };
+        return readWriteData;
     }
 
     public int findPageNumber(int index) throws IOException {
@@ -52,6 +57,11 @@ public class IndexManager {
         int middle;
         int nextPotentialPage;
 
+        if (index < leftIndex) {
+            buffer.position(0);
+            return -1;
+        }
+
         while (leftPage <= rightPage) {
             if (index >= leftIndex) {
                 while (buffer.hasRemaining()) {
@@ -59,6 +69,7 @@ public class IndexManager {
                     nextPotentialPage = buffer.getInt();
 
                     if (rightIndex == 0) {
+                        buffer.position(0);
                         return potentiallyFoundPage; // reading placeholder data, the file has ended logically
                     }
 
@@ -83,12 +94,12 @@ public class IndexManager {
             leftIndex = buffer.getInt();
             potentiallyFoundPage = buffer.getInt();
         }
+        buffer.position(0);
         return -1;
     }
 
     public void createStartingIndexPage(int startingIndex) throws IOException {
 
-        buffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
         buffer.putInt(startingIndex);
         buffer.putInt(indexPagesCount);
 
@@ -96,6 +107,21 @@ public class IndexManager {
 
         currentPageLoaded = indexPagesCount;
         indexPagesCount++;
+    }
 
+    public void printIndexFile() throws IOException {
+        int currentPage = currentPageLoaded;
+        for (int i = 0; i < indexPagesCount; i++) {
+            int recordCounter = 0;
+            readPageIntoBuffer(i);
+
+            while (buffer.hasRemaining()) {
+                int key = buffer.getInt();
+                int pageNumber = buffer.getInt();
+                if (key != 0) {
+                    recordCounter++;
+                }
+            }
+        }
     }
 }
