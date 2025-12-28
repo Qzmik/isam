@@ -15,12 +15,27 @@ public class ISAMMain {
             switch (scannedOption) {
                 case 'i':
                     Record record = createRecord(scanner);
-                    isamManager.writeRecord(firstWrite, record);
+                    isamManager.writeRecord(firstWrite, record, true);
                     firstWrite = false;
                     break;
                 case 'r':
                     int key = getKeyFromUser(scanner);
-                    isamManager.readRecord(key);
+                    isamManager.readRecord(key, true);
+                    break;
+                case 'd':
+                    key = getKeyFromUser(scanner);
+                    isamManager.deleteRecord(key, true);
+                    break;
+                case 'u':
+                    key = getKeyFromUser(scanner);
+                    record = createRecord(scanner);
+                    isamManager.updateRecord(key, record, true);
+                    break;
+                case 'p':
+                    isamManager.printISAM();
+                    break;
+                case 'o':
+                    // reorg
                     break;
             }
         }

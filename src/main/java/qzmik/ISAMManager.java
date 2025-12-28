@@ -31,21 +31,24 @@ public class ISAMManager {
         return potentialRecord;
     }
 
-    public void readRecord(int key) throws IOException {
+    public void readRecord(int key, boolean displayData) throws IOException {
 
         int oldIndexReadWriteData[] = indexManager.giveReadWriteData();
         int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
 
         Record potentialRecord = recordManager.checkForRecordInCurrentBuffer(key);
 
-        if (potentialRecord != null) {
+        if (potentialRecord != null && potentialRecord.getVoltage() != 0) {
             int newIndexReadWriteData[] = indexManager.giveReadWriteData();
             int newRecordReadWriteData[] = recordManager.giveReadWriteData();
 
-            System.out.printf("Record found\nKey: %d Voltage: %f Current: %f\n", potentialRecord.getKey(),
-                    potentialRecord.getVoltage(), potentialRecord.getCurrent());
-            displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
-                    newRecordReadWriteData);
+            if (displayData) {
+                System.out.printf("Record found\nKey: %d Voltage: %f Current: %f\n", potentialRecord.getKey(),
+                        potentialRecord.getVoltage(), potentialRecord.getCurrent());
+
+                displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                        newRecordReadWriteData);
+            }
             return;
         }
 
@@ -54,46 +57,116 @@ public class ISAMManager {
 
         int newIndexReadWriteData[] = indexManager.giveReadWriteData();
         int newRecordReadWriteData[] = recordManager.giveReadWriteData();
-        if (potentialRecord != null) {
-            System.out.printf("Record found\n Key: %d Voltage: %f Current: %f\n", potentialRecord.getKey(),
-                    potentialRecord.getVoltage(), potentialRecord.getCurrent());
-        } else {
-            System.out.printf("Record not found\n");
+        if (displayData) {
+            if (potentialRecord != null && potentialRecord.getVoltage() != 0) {
+                System.out.printf("Record found\n Key: %d Voltage: %f Current: %f\n", potentialRecord.getKey(),
+                        potentialRecord.getVoltage(), potentialRecord.getCurrent());
+            } else {
+                System.out.printf("Record not found\n");
+            }
+            displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                    newRecordReadWriteData);
         }
-        displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
-                newRecordReadWriteData);
 
         return;
     }
 
-    public void writeRecord(boolean firstWrite, Record record) throws IOException {
+    public boolean writeRecord(boolean firstWrite, Record record, boolean displayData) throws IOException {
         int oldIndexReadWriteData[] = indexManager.giveReadWriteData();
         int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
 
         if (firstWrite) {
             indexManager.createStartingIndexPage(record.getKey());
             recordManager.writeRecord(record, 0);
-            return;
+            return true;
         }
 
-        if (readRecordSilent(record.getKey()) != null) {
-            System.out.printf("Record already exists!\n");
-            int newIndexReadWriteData[] = indexManager.giveReadWriteData();
-            int newRecordReadWriteData[] = recordManager.giveReadWriteData();
-            displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
-                    newRecordReadWriteData);
-            return;
+        Record potentialRecord = readRecordSilent(record.getKey());
+
+        if (potentialRecord != null) {
+            if (potentialRecord.getVoltage() != 0) {
+                if (displayData) {
+                    System.out.printf("Record already exists!\n");
+                    int newIndexReadWriteData[] = indexManager.giveReadWriteData();
+                    int newRecordReadWriteData[] = recordManager.giveReadWriteData();
+                    displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                            newRecordReadWriteData);
+                }
+                return false;
+            }
+            if (potentialRecord.getVoltage() == 0) {
+                updateRecord(record.getKey(), record, false);
+                if (displayData) {
+                    int newIndexReadWriteData[] = indexManager.giveReadWriteData();
+                    int newRecordReadWriteData[] = recordManager.giveReadWriteData();
+                    displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                            newRecordReadWriteData);
+                }
+                return true;
+            }
         }
+
         int pageNumber = indexManager.findPageNumber(record.getKey());
-        System.out.printf("%d\n", pageNumber);
         recordManager.writeRecord(record, pageNumber);
         int newIndexReadWriteData[] = indexManager.giveReadWriteData();
         int newRecordReadWriteData[] = recordManager.giveReadWriteData();
-        displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
-                newRecordReadWriteData);
+        if (displayData)
+            displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                    newRecordReadWriteData);
+        return true;
     }
 
-    public void printISAM() {
+    public void deleteRecord(int key, boolean displayData) throws IOException {
+        int oldIndexReadWriteData[] = indexManager.giveReadWriteData();
+        int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
+
+        int pageNumber = indexManager.findPageNumber(key);
+        recordManager.updateRecord(pageNumber, new Record(key, 0, 0, -1));
+        int newIndexReadWriteData[] = indexManager.giveReadWriteData();
+        int newRecordReadWriteData[] = recordManager.giveReadWriteData();
+        if (displayData)
+            displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                    newRecordReadWriteData);
+        return;
+    }
+
+    public void updateRecord(int originalKey, Record record, boolean displayData) throws IOException {
+        int oldIndexReadWriteData[] = indexManager.giveReadWriteData();
+        int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
+
+        if (record.getKey() != originalKey) {
+            if (writeRecord(false, record, false)) {
+                deleteRecord(originalKey, displayData);
+            } else {
+                if (displayData) {
+                    System.out.printf("Record with specified key already exists!");
+                    int newIndexReadWriteData[] = indexManager.giveReadWriteData();
+                    int newRecordReadWriteData[] = recordManager.giveReadWriteData();
+                    if (displayData)
+                        displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData,
+                                newIndexReadWriteData,
+                                newRecordReadWriteData);
+                }
+            }
+        } else {
+            int pageNumber = indexManager.findPageNumber(record.getKey());
+            recordManager.updateRecord(pageNumber, record);
+            int newIndexReadWriteData[] = indexManager.giveReadWriteData();
+            int newRecordReadWriteData[] = recordManager.giveReadWriteData();
+            if (displayData)
+                displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData,
+                        newIndexReadWriteData,
+                        newRecordReadWriteData);
+        }
+    }
+
+    public void printISAM() throws IOException {
+        indexManager.printIndexFile();
+        recordManager.printRecordFile();
+        recordManager.printOverflowFile();
+    }
+
+    public void reorganize() throws IOException {
 
     }
 }

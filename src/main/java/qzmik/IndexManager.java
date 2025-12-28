@@ -23,6 +23,9 @@ public class IndexManager {
     }
 
     private void readPageIntoBuffer(int targetPage) throws IOException, EOFException {
+        if (targetPage == currentPageLoaded) {
+            return;
+        }
         byte[] recordArray = new byte[BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK];
         indexFile.position(targetPage * BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
         int numberOfBytesRead = indexFile.readPageToBuffer(recordArray);
@@ -110,8 +113,9 @@ public class IndexManager {
     }
 
     public void printIndexFile() throws IOException {
-        int currentPage = currentPageLoaded;
+        System.out.printf("INDEX FILE:\n");
         for (int i = 0; i < indexPagesCount; i++) {
+            System.out.printf("----------------------\nPAGE %d:\n", i + 1);
             int recordCounter = 0;
             readPageIntoBuffer(i);
 
@@ -120,8 +124,14 @@ public class IndexManager {
                 int pageNumber = buffer.getInt();
                 if (key != 0) {
                     recordCounter++;
-                }
+                    System.out.printf("Index %d: Main file page %d\n", key, pageNumber + 1);
+                } else
+                    System.out.printf("-\n");
+
             }
+            System.out.printf("Filling: %f%%\n", 100.0 * recordCounter / BLOCKING_FACTOR);
         }
+
+        buffer.position(0);
     }
 }
