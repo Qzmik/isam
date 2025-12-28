@@ -1,15 +1,30 @@
 package qzmik;
 
+import java.io.File;
 import java.io.IOException;
 
 public class ISAMManager {
 
     private IndexManager indexManager;
-    private RecordManager recordManager;
+    public RecordManager recordManager;
 
-    public ISAMManager() throws IOException {
+    private double alpha;
+    private double ratio;
+
+    public ISAMManager(double a, double r) throws IOException {
+
+        File wrkspace = new File("workspace");
+
+        wrkspace.mkdir();
+
+        for (File file : wrkspace.listFiles()) {
+            file.delete();
+        }
+
+        alpha = a;
+        ratio = r;
         indexManager = new IndexManager();
-        recordManager = new RecordManager();
+        recordManager = new RecordManager(alpha, ratio);
     }
 
     private void displayOperationPerformance(int oldIndexRWD[], int oldRecordRWD[], int newIndexRWD[],
@@ -95,7 +110,7 @@ public class ISAMManager {
                 return false;
             }
             if (potentialRecord.getVoltage() == 0) {
-                updateRecord(record.getKey(), record, false);
+                updateRecord(record.getKey(), record, false, true);
                 if (displayData) {
                     int newIndexReadWriteData[] = indexManager.giveReadWriteData();
                     int newRecordReadWriteData[] = recordManager.giveReadWriteData();
@@ -107,6 +122,7 @@ public class ISAMManager {
         }
 
         int pageNumber = indexManager.findPageNumber(record.getKey());
+
         recordManager.writeRecord(record, pageNumber);
         int newIndexReadWriteData[] = indexManager.giveReadWriteData();
         int newRecordReadWriteData[] = recordManager.giveReadWriteData();
@@ -121,7 +137,7 @@ public class ISAMManager {
         int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
 
         int pageNumber = indexManager.findPageNumber(key);
-        recordManager.updateRecord(pageNumber, new Record(key, 0, 0, -1));
+        recordManager.updateRecord(pageNumber, new Record(key, 0.0f, 0.0f, -1), false);
         int newIndexReadWriteData[] = indexManager.giveReadWriteData();
         int newRecordReadWriteData[] = recordManager.giveReadWriteData();
         if (displayData)
@@ -130,7 +146,8 @@ public class ISAMManager {
         return;
     }
 
-    public void updateRecord(int originalKey, Record record, boolean displayData) throws IOException {
+    public void updateRecord(int originalKey, Record record, boolean displayData, boolean fromWrite)
+            throws IOException {
         int oldIndexReadWriteData[] = indexManager.giveReadWriteData();
         int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
 
@@ -150,7 +167,7 @@ public class ISAMManager {
             }
         } else {
             int pageNumber = indexManager.findPageNumber(record.getKey());
-            recordManager.updateRecord(pageNumber, record);
+            recordManager.updateRecord(pageNumber, record, fromWrite);
             int newIndexReadWriteData[] = indexManager.giveReadWriteData();
             int newRecordReadWriteData[] = recordManager.giveReadWriteData();
             if (displayData)
@@ -161,12 +178,41 @@ public class ISAMManager {
     }
 
     public void printISAM() throws IOException {
+        int oldIndexReadWriteData[] = indexManager.giveReadWriteData();
+        int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
+
         indexManager.printIndexFile();
         recordManager.printRecordFile();
         recordManager.printOverflowFile();
+
+        int newIndexReadWriteData[] = indexManager.giveReadWriteData();
+        int newRecordReadWriteData[] = recordManager.giveReadWriteData();
+
+        displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                newRecordReadWriteData);
     }
 
     public void reorganize() throws IOException {
+        if (recordManager.mainRecordsCount == 0) {
+            return;
+        }
 
+        int oldIndexReadWriteData[] = indexManager.giveReadWriteData();
+        int oldRecordReadWriteData[] = recordManager.giveReadWriteData();
+
+        long amountOfPagesToAlloc = (long) Math
+                .ceil((recordManager.mainRecordsCount + recordManager.overflowRecordsCount)
+                        / (RecordManager.BLOCKING_FACTOR * alpha));
+
+        indexManager.beginReorganization(amountOfPagesToAlloc);
+        recordManager.beginReorganization(amountOfPagesToAlloc);
+
+        recordManager.reorganize(indexManager);
+
+        int newIndexReadWriteData[] = indexManager.giveReadWriteData();
+        int newRecordReadWriteData[] = recordManager.giveReadWriteData();
+
+        displayOperationPerformance(oldIndexReadWriteData, oldRecordReadWriteData, newIndexReadWriteData,
+                newRecordReadWriteData);
     }
 }

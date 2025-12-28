@@ -10,16 +10,27 @@ public class IndexManager {
     public static final int BLOCKING_FACTOR = 4;
     private ByteBuffer buffer;
     private IndexFile indexFile;
-    private int indexPagesCount = 0;
+    private IndexFile reorganizationIndexFile;
+    public int indexPagesCount = 0;
     private int currentPageLoaded = -1;
+
+    private String dodger = "0";
 
     private int pageReads = 0;
     private int pageWrites = 0;
 
     public IndexManager() throws FileNotFoundException, IOException {
-        indexFile = new IndexFile();
+        indexFile = new IndexFile("indexFile" + dodger);
         buffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
         writeBufferToFile(0);
+    }
+
+    public void resetIndex(int ipc) {
+        indexPagesCount = ipc;
+        currentPageLoaded = -1;
+        indexFile = reorganizationIndexFile;
+        buffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+        reorganizationIndexFile = null;
     }
 
     private void readPageIntoBuffer(int targetPage) throws IOException, EOFException {
@@ -51,21 +62,20 @@ public class IndexManager {
 
     public int findPageNumber(int index) throws IOException {
 
-        // check if key already in buffer
-        int rightIndex;
+        int leftIndex = -1;
+        int potentiallyFoundPage = -1;
+        int rightIndex = Integer.MAX_VALUE;
         int leftPage = 0;
-        int rightPage = indexPagesCount;
-        int leftIndex = buffer.getInt();
-        int potentiallyFoundPage = buffer.getInt();
+        int rightPage = indexPagesCount - 1;
         int middle;
         int nextPotentialPage;
 
-        if (index < leftIndex) {
-            buffer.position(0);
-            return -1;
-        }
-
         while (leftPage <= rightPage) {
+            middle = leftPage + (rightPage - leftPage) / 2;
+
+            readPageIntoBuffer(middle);
+            leftIndex = buffer.getInt();
+            potentiallyFoundPage = buffer.getInt();
             if (index >= leftIndex) {
                 while (buffer.hasRemaining()) {
                     rightIndex = buffer.getInt();
@@ -92,10 +102,10 @@ public class IndexManager {
             } else {
                 leftPage = currentPageLoaded + 1;
             }
-            middle = (leftPage + rightPage) / 2;
-            readPageIntoBuffer(middle);
-            leftIndex = buffer.getInt();
-            potentiallyFoundPage = buffer.getInt();
+        }
+        if (index > rightIndex) {
+            buffer.position(0);
+            return potentiallyFoundPage;
         }
         buffer.position(0);
         return -1;
@@ -134,4 +144,19 @@ public class IndexManager {
 
         buffer.position(0);
     }
+
+    public void beginReorganization(long amountOfPagesToAlloc) throws IOException {
+        dodger = dodger == "1" ? "0" : "1";
+        reorganizationIndexFile = new IndexFile("indexFile" + dodger);
+
+        reorganizationIndexFile.preallocate(
+                (long) Math.ceil(amountOfPagesToAlloc / BLOCKING_FACTOR) * IndexRecord.RECORD_SIZE_ON_DISK
+                        * BLOCKING_FACTOR);
+    }
+
+    public void putIndexReorg(ByteBuffer indexBuffer) throws IOException {
+        reorganizationIndexFile.writePageOfRecords(indexBuffer.array());
+        pageWrites++;
+    }
+
 }

@@ -8,8 +8,8 @@ public class IndexFile {
 
     private RandomAccessFile fileHook;
 
-    public IndexFile() throws FileNotFoundException {
-        fileHook = new RandomAccessFile("workspace/indexFile", "rw");
+    public IndexFile(String name) throws FileNotFoundException {
+        fileHook = new RandomAccessFile(String.format("workspace/%1$s", name), "rw");
     }
 
     public void writeRecord(IndexRecord record) throws IOException {
@@ -29,4 +29,7 @@ public class IndexFile {
         fileHook.seek(pos);
     }
 
+    public void preallocate(long length) throws IOException {
+        fileHook.setLength(length);
+    }
 }

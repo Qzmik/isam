@@ -1,6 +1,7 @@
 package qzmik;
 
 import java.io.EOFException;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -8,14 +9,18 @@ import java.nio.ByteBuffer;
 public class RecordManager {
 
     public static final int BLOCKING_FACTOR = 4;
-    public static final double ALPHA = 0.5;
+    private double ALPHA;
+    private double OVERFLOW_TO_MAIN_RATIO;
     private ByteBuffer mainBuffer;
     private RecordFile mainFile;
+    private RecordFile reorganizationMainFile;
     private int mainPagesCount = 0;
-    private int mainRecordsCount = 0;
+    public int mainRecordsCount = 0;
     private int currentMainPageLoaded = -1;
     private int mainPageReads = 0;
     private int mainPageWrites = 0;
+
+    private String dodger = "0";
 
     // this points at the first record in overflow that COULD NOT fit into main page
     // due to its key being the smallest
@@ -23,15 +28,18 @@ public class RecordManager {
 
     private ByteBuffer overflowBuffer;
     private RecordFile overflowFile;
+    private RecordFile reorganizationOverflowFile;
     private int overflowPagesCount = 0;
-    private int overflowRecordsCount = 0;
+    public int overflowRecordsCount = 0;
     private int currentOverflowPageLoaded = -1;
     private int overflowPageReads = 0;
     private int overflowPageWrites = 0;
 
-    public RecordManager() throws FileNotFoundException, IOException {
-        mainFile = new RecordFile(false);
-        overflowFile = new RecordFile(true);
+    public RecordManager(double alpha, double ratio) throws FileNotFoundException, IOException {
+        ALPHA = alpha;
+        OVERFLOW_TO_MAIN_RATIO = ratio;
+        mainFile = new RecordFile("mainFile" + dodger);
+        overflowFile = new RecordFile("overflowFile" + dodger);
         mainBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
         writeBufferToMainFile(0);
         mainPagesCount++;
@@ -84,7 +92,7 @@ public class RecordManager {
         overflowBuffer.position(0);
     }
 
-    private int[] determineOverflowPosition(int overflow) {
+    public int[] determineOverflowPosition(int overflow) {
         // pageNumber, position on page
         int overflowPosition[] = { overflow / BLOCKING_FACTOR, overflow % BLOCKING_FACTOR };
         return overflowPosition;
@@ -96,7 +104,6 @@ public class RecordManager {
     }
 
     public Record readRecord(int pageNumber, int key) throws IOException {
-
         // directed to special overflow
         if (pageNumber == -1) {
             int overflow = specialOverflowPointer;
@@ -133,6 +140,8 @@ public class RecordManager {
     }
 
     public Record checkForRecordInCurrentBuffer(int key) throws IOException {
+        mainBuffer.position(0);
+        overflowBuffer.position(0);
         while (mainBuffer.hasRemaining()) {
             int recordKey = mainBuffer.getInt();
             Double recordVoltage = mainBuffer.getDouble();
@@ -192,7 +201,6 @@ public class RecordManager {
     }
 
     public void writeRecord(Record record, int pageNumber) throws IOException {
-
         // directed to special overflow
         if (pageNumber == -1) {
             int recordKey = 0;
@@ -360,8 +368,9 @@ public class RecordManager {
         overflowBuffer.position(0);
     }
 
-    public void updateRecord(int pageNumber, Record record) throws IOException {
-
+    public void updateRecord(int pageNumber, Record record, boolean fromWrite) throws IOException {
+        mainBuffer.position(0);
+        overflowBuffer.position(0);
         if (pageNumber == -1) {
             int overflow = specialOverflowPointer;
             if (overflow == -1) {
@@ -380,7 +389,7 @@ public class RecordManager {
                     break;
                 }
                 if (recordIndex == record.getKey()) {
-                    if (overflowBuffer.getDouble() == 0) {
+                    if (overflowBuffer.getDouble() == 0 && !fromWrite) {
                         System.out.printf("Record does not exist!");
                         overflowBuffer.position(0);
                         return;
@@ -402,7 +411,7 @@ public class RecordManager {
             int recordKey = mainBuffer.getInt();
 
             if (recordKey == record.getKey()) {
-                if (mainBuffer.getDouble() == 0) {
+                if (mainBuffer.getDouble() == 0 && !fromWrite) {
                     System.out.printf("Record does not exist!");
                     mainBuffer.position(0);
                     return;
@@ -428,7 +437,7 @@ public class RecordManager {
 
         // if after reading just the first record of current buffer it was already too
         // big, then it is not in the buffer, nor in corresponding overflow
-        if (mainBuffer.position() == 0) {
+        if (mainBuffer.position() == 0 && !fromWrite) {
             System.out.printf("Record does not exist!");
             return;
         }
@@ -455,7 +464,7 @@ public class RecordManager {
             }
 
             if (recordKey == record.getKey()) {
-                if (overflowBuffer.getDouble() == 0) {
+                if (overflowBuffer.getDouble() == 0 && !fromWrite) {
                     System.out.printf("Record does not exist!");
                     overflowBuffer.position(0);
                     return;
@@ -476,6 +485,8 @@ public class RecordManager {
     }
 
     public void printRecordFile() throws IOException {
+        mainBuffer.position(0);
+        overflowBuffer.position(0);
         System.out.printf("----------------------\nRECORD FILE:\n");
         int specialOverflow = specialOverflowPointer;
         while (specialOverflow != -1) {
@@ -542,6 +553,8 @@ public class RecordManager {
     }
 
     public void printOverflowFile() throws IOException {
+        mainBuffer.position(0);
+        overflowBuffer.position(0);
         System.out.printf("----------------------\nOVERFLOW FILE:\n");
         for (int i = 0; i < overflowPagesCount; i++) {
             System.out.printf("----------------------\nPAGE %d:\n", i + 1);
@@ -566,5 +579,196 @@ public class RecordManager {
             System.out.printf("Filling: %f%%\n", 100.0 * recordCounter / BLOCKING_FACTOR);
             overflowBuffer.position(0);
         }
+    }
+
+    public void beginReorganization(long amountOfPagesToAlloc) throws IOException {
+
+        dodger = dodger == "1" ? "0" : "1";
+        reorganizationMainFile = new RecordFile("mainFile" + dodger);
+        reorganizationOverflowFile = new RecordFile("overflowFile" + dodger);
+
+        reorganizationMainFile
+                .preallocate(amountOfPagesToAlloc * Record.RECORD_SIZE_ON_DISK * BLOCKING_FACTOR);
+        reorganizationOverflowFile.preallocate(
+                (long) (Math.ceil(amountOfPagesToAlloc * OVERFLOW_TO_MAIN_RATIO) * Record.RECORD_SIZE_ON_DISK
+                        * BLOCKING_FACTOR));
+    }
+
+    public void reorganize(IndexManager indexManager) throws IOException {
+        mainBuffer.position(0);
+        overflowBuffer.position(0);
+
+        ByteBuffer reorganizationBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+        ByteBuffer indexBuffer = ByteBuffer.allocate(IndexManager.BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+        int pageCounter = 0;
+        int recordCounter = 0;
+        int fullRecordCounter = 0;
+        int indexPageCounter = 0;
+
+        int specialOverflow = specialOverflowPointer;
+        while (specialOverflow != -1) {
+            int overflowPosition[] = determineOverflowPosition(specialOverflow);
+            readOverflowPageIntoBuffer(overflowPosition[0]);
+            overflowBuffer.position(overflowPosition[1] * Record.RECORD_SIZE_ON_DISK);
+
+            int key = overflowBuffer.getInt();
+            double voltage = overflowBuffer.getDouble();
+            double current = overflowBuffer.getDouble();
+            specialOverflow = overflowBuffer.getInt();
+
+            if (voltage != 0) {
+                recordCounter++;
+                fullRecordCounter++;
+                reorganizationBuffer.putInt(key);
+                reorganizationBuffer.putDouble(voltage);
+                reorganizationBuffer.putDouble(current);
+                reorganizationBuffer.putInt(-1);
+            }
+            if (recordCounter >= (int) (ALPHA * BLOCKING_FACTOR)) {
+                reorganizationBuffer.position(0);
+                indexBuffer.putInt(reorganizationBuffer.getInt());
+                indexBuffer.putInt(pageCounter);
+                if (!indexBuffer.hasRemaining()) {
+                    indexPageCounter++;
+                    indexManager.putIndexReorg(indexBuffer);
+                    indexBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+                }
+                reorganizationMainFile.position(pageCounter * BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+                pageCounter++;
+                reorganizationMainFile.writePageOfRecords(reorganizationBuffer.array());
+                mainPageWrites++;
+                reorganizationBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+                recordCounter = 0;
+            }
+            mainBuffer.position(0);
+            overflowBuffer.position(0);
+        }
+
+        for (int i = 0; i < mainPagesCount; i++) {
+            readMainPageIntoBuffer(i);
+
+            while (mainBuffer.hasRemaining()) {
+                int key = mainBuffer.getInt();
+                double voltage = mainBuffer.getDouble();
+                double current = mainBuffer.getDouble();
+                int overflow = mainBuffer.getInt();
+                if (key != 0) {
+                    if (voltage != 0) {
+                        recordCounter++;
+                        fullRecordCounter++;
+                        reorganizationBuffer.putInt(key);
+                        reorganizationBuffer.putDouble(voltage);
+                        reorganizationBuffer.putDouble(current);
+                        reorganizationBuffer.putInt(-1);
+                    }
+                    if (recordCounter >= (int) (ALPHA * BLOCKING_FACTOR)) {
+                        reorganizationBuffer.position(0);
+                        indexBuffer.putInt(reorganizationBuffer.getInt());
+                        indexBuffer.putInt(pageCounter);
+                        if (!indexBuffer.hasRemaining()) {
+                            indexPageCounter++;
+                            indexManager.putIndexReorg(indexBuffer);
+                            indexBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+                        }
+                        reorganizationMainFile.position(pageCounter * BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+                        pageCounter++;
+                        reorganizationMainFile.writePageOfRecords(reorganizationBuffer.array());
+                        mainPageWrites++;
+                        reorganizationBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+                        recordCounter = 0;
+                    }
+                    while (overflow != -1) {
+                        int overflowPosition[] = determineOverflowPosition(overflow);
+                        readOverflowPageIntoBuffer(overflowPosition[0]);
+                        overflowBuffer.position(overflowPosition[1] * Record.RECORD_SIZE_ON_DISK);
+
+                        key = overflowBuffer.getInt();
+                        voltage = overflowBuffer.getDouble();
+                        current = overflowBuffer.getDouble();
+                        overflow = overflowBuffer.getInt();
+
+                        if (voltage != 0) {
+                            recordCounter++;
+                            fullRecordCounter++;
+                            reorganizationBuffer.putInt(key);
+                            reorganizationBuffer.putDouble(voltage);
+                            reorganizationBuffer.putDouble(current);
+                            reorganizationBuffer.putInt(-1);
+                        }
+                        if (recordCounter >= (int) (ALPHA * BLOCKING_FACTOR)) {
+                            reorganizationBuffer.position(0);
+                            indexBuffer.putInt(reorganizationBuffer.getInt());
+                            indexBuffer.putInt(pageCounter);
+                            if (!indexBuffer.hasRemaining()) {
+                                indexPageCounter++;
+                                indexManager.putIndexReorg(indexBuffer);
+                                indexBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+                            }
+                            reorganizationMainFile.position(pageCounter * BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+                            pageCounter++;
+                            reorganizationMainFile.writePageOfRecords(reorganizationBuffer.array());
+                            mainPageWrites++;
+                            reorganizationBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+                            recordCounter = 0;
+                        }
+                    }
+                }
+            }
+            mainBuffer.position(0);
+            overflowBuffer.position(0);
+        }
+        if (reorganizationBuffer.position() != 0) {
+            reorganizationBuffer.position(0);
+            indexBuffer.putInt(reorganizationBuffer.getInt());
+            indexBuffer.putInt(pageCounter);
+
+            indexPageCounter++;
+            indexManager.putIndexReorg(indexBuffer);
+            indexBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+
+            reorganizationMainFile.position(pageCounter * BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+            pageCounter++;
+            reorganizationMainFile.writePageOfRecords(reorganizationBuffer.array());
+            mainPageWrites++;
+            reorganizationBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+            recordCounter = 0;
+        } else if (indexBuffer.position() != 0) {
+            indexPageCounter++;
+            indexManager.putIndexReorg(indexBuffer);
+            indexBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * IndexRecord.RECORD_SIZE_ON_DISK);
+        }
+
+        mainPagesCount = pageCounter;
+        overflowPagesCount = (int) Math.ceil(pageCounter * OVERFLOW_TO_MAIN_RATIO);
+        currentMainPageLoaded = -1;
+        currentOverflowPageLoaded = -1;
+        mainRecordsCount = fullRecordCounter;
+        overflowRecordsCount = 0;
+
+        dodger = dodger == "1" ? "0" : "1";
+
+        mainBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+        overflowBuffer = ByteBuffer.allocate(BLOCKING_FACTOR * Record.RECORD_SIZE_ON_DISK);
+
+        indexManager.resetIndex(indexPageCounter);
+        specialOverflowPointer = -1;
+
+        mainFile = reorganizationMainFile;
+
+        reorganizationMainFile = null;
+        overflowFile = reorganizationOverflowFile;
+        reorganizationOverflowFile = null;
+
+        File main = new File("workspace/mainFile" + dodger);
+        main.delete();
+
+        File overflow = new File("workspace/overflowFile" + dodger);
+        overflow.delete();
+
+        File index = new File("workspace/indexFile" + dodger);
+        index.delete();
+
+        dodger = dodger == "1" ? "0" : "1";
+
     }
 }

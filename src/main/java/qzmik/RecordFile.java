@@ -8,12 +8,8 @@ public class RecordFile {
 
     private RandomAccessFile fileHook;
 
-    public RecordFile(boolean overflow) throws FileNotFoundException {
-        if (!overflow) {
-            fileHook = new RandomAccessFile("workspace/mainFile", "rw");
-        } else {
-            fileHook = new RandomAccessFile("workspace/overflowFile", "rw");
-        }
+    public RecordFile(String name) throws FileNotFoundException {
+        fileHook = new RandomAccessFile(String.format("workspace/%1$s", name), "rw");
     }
 
     public void writeRecord(Record record) throws IOException {
@@ -33,5 +29,9 @@ public class RecordFile {
 
     public void position(long pos) throws IOException {
         fileHook.seek(pos);
+    }
+
+    public void preallocate(long length) throws IOException {
+        fileHook.setLength(length);
     }
 }
